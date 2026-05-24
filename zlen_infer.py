@@ -1,19 +1,3 @@
-# =============================================================================
-# ZLEN — Inferensi dari Checkpoint
-# Gunakan ini setelah training selesai untuk enhance gambar baru.
-#
-# Cara pakai:
-#   # Satu gambar
-#   python zlen_infer.py --checkpoint zlen_checkpoints/zlen_best.pth \
-#                        --input foto_gelap.jpg \
-#                        --output hasil.jpg
-#
-#   # Seluruh folder
-#   python zlen_infer.py --checkpoint zlen_checkpoints/zlen_best.pth \
-#                        --input folder_gelap/ \
-#                        --output folder_hasil/
-# =============================================================================
-
 import os
 import argparse
 from pathlib import Path
@@ -35,25 +19,15 @@ IMG_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff'}
 
 
 def load_checkpoint(checkpoint_path):
-    """
-    Muat model dari file checkpoint hasil zlen_train.py.
-
-    Checkpoint berisi:
-      - model_state : bobot model
-      - epoch       : epoch terakhir saat disimpan
-      - loss        : best loss saat checkpoint dibuat
-      - args        : hyperparameter saat training
-    """
     print(f"[INFO] Memuat checkpoint: {checkpoint_path}")
     ckpt = torch.load(checkpoint_path, map_location=DEVICE)
 
-    # Ambil n_iter dari args training jika ada, fallback ke default
     saved_args = ckpt.get('args', {})
     n_iter = saved_args.get('n_iter', N_ITER)
 
     model = ZLENModel(n_iter=n_iter).to(DEVICE)
     model.load_state_dict(ckpt['model_state'])
-    model.eval()   # matikan dropout, gunakan bobot penuh
+    model.eval()
 
     epoch = ckpt.get('epoch', '?')
     loss  = ckpt.get('loss',  '?')
@@ -64,38 +38,21 @@ def load_checkpoint(checkpoint_path):
 
 
 def enhance_single(model, img_path, img_size=IMG_SIZE, save_comparison_img=False):
-    """
-    Enhance satu gambar menggunakan model yang sudah dilatih.
-
-    Args:
-        model            : ZLENModel dalam mode eval
-        img_path         : path ke gambar input
-        img_size         : ukuran resize sebelum diproses
-        save_comparison_img : simpan 3-panel (input | noise | output)
-    Returns:
-        enhanced_pil : PIL Image hasil enhancement
-    """
-    # Load gambar -> tensor
     img = Image.open(img_path).convert('RGB')
-    original_size = img.size   # simpan ukuran asli untuk resize balik
+    original_size = img.size
 
     tf = transforms.Compose([
         transforms.Resize((img_size, img_size)),
         transforms.ToTensor(),
     ])
-    img_tensor = tf(img).unsqueeze(0).to(DEVICE)   # (1, 3, H, W)
+    img_tensor = tf(img).unsqueeze(0).to(DEVICE)
 
-    # Inferensi (tanpa hitung gradient, lebih cepat dan hemat VRAM)
     with torch.no_grad():
         enhanced, _, noise_map = model(img_tensor)
 
-    # Konversi ke PIL
     enhanced_pil = tensor_to_pil(enhanced)
-
-    # Resize balik ke ukuran asli (opsional tapi lebih rapi)
     enhanced_pil = enhanced_pil.resize(original_size, Image.LANCZOS)
 
-    # Simpan 3-panel untuk analisis jika diminta
     if save_comparison_img:
         cmp_path = str(img_path).rsplit('.', 1)[0] + '_comparison.png'
         save_comparison(img_tensor, enhanced, noise_map, cmp_path)
@@ -108,7 +65,6 @@ def run(args):
     input_path = Path(args.input)
     output_path = Path(args.output)
 
-    # ── Mode: satu gambar ─────────────────────────────────────────────────────
     if input_path.is_file():
         output_path.parent.mkdir(parents=True, exist_ok=True)
         result = enhance_single(
@@ -119,7 +75,6 @@ def run(args):
         result.save(str(output_path))
         print(f"[INFO] Tersimpan: {output_path}")
 
-    # ── Mode: folder ──────────────────────────────────────────────────────────
     elif input_path.is_dir():
         output_path.mkdir(parents=True, exist_ok=True)
         image_files = sorted([
@@ -133,7 +88,6 @@ def run(args):
 
         print(f"[INFO] Memproses {len(image_files)} gambar...")
         for i, img_file in enumerate(image_files, 1):
-            # Pertahankan struktur subfolder di output
             rel_path  = img_file.relative_to(input_path)
             out_file  = output_path / rel_path
             out_file.parent.mkdir(parents=True, exist_ok=True)
@@ -141,11 +95,10 @@ def run(args):
             result = enhance_single(
                 model, img_file,
                 img_size            = args.img_size,
-                save_comparison_img = False,   # [FIX v2] dihandle manual di bawah
+                save_comparison_img = False,
             )
             result.save(str(out_file))
 
-            # [FIX v2] Simpan comparison ke output folder, bukan input folder
             if args.comparison:
                 tf = transforms.Compose([
                     transforms.Resize((args.img_size, args.img_size)),
